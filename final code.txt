@@ -1,0 +1,202 @@
+// Flame Sensor Pins
+#define FLAME_SENSOR_FRONT PORTB.F0
+#define FLAME_SENSOR_LEFT PORTB.F1
+#define FLAME_SENSOR_RIGHT PORTB.F2
+
+// Ultrasonic Sensor Pins
+#define TRIG_PIN PORTB.F3
+#define ECHO_PIN PORTB.F4
+
+// Motor Control Pins
+#define LEFT_MOTOR_FORWARD PORTC.F4
+#define LEFT_MOTOR_BACKWARD PORTC.F5
+#define RIGHT_MOTOR_FORWARD PORTC.F6
+#define RIGHT_MOTOR_BACKWARD PORTC.F7
+
+// Servo Motor Pin
+#define SERVO_PIN PORTC.F2 // Using CCP1 for PWM
+#define MIN_DUTY 40  // Adjusted for 0 degrees
+#define MAX_DUTY 250 // Corresponds to 180 degrees
+// Relay Pin
+#define RELAY_PIN PORTD.F0
+#define BUZZER_PIN PORTD.F1
+
+unsigned int distance;
+
+void setupPWM() {
+T2CON = 0x07; // Timer2 on with prescaler 16
+PR2 = 250; // Set period for 50Hz PWM frequency
+CCP1CON = 0x0C; // CCP1 in PWM mode
+CCPR1L = 125; // 50% duty cycle
+TRISC &= 0xFB; // RC2 is an output for PWM (cleared bit 2)
+ }
+
+    void set_servo_pwm(unsigned int angle) {
+    unsigned int duty_cycle = ((angle * (MAX_DUTY - MIN_DUTY)) / 180) + MIN_DUTY;
+     CCPR1L = duty_cycle >> 2; // Set the high 8 bits
+     CCP1CON = (CCP1CON & 0xCF) | ((duty_cycle & 0x03) << 4); // Set the low 2 bits
+     }
+
+void Initialize() {
+    // Initialize Sensor Pins
+    TRISB = 0x1F; // Set RB0-RB4 as input (Sensor Pins), except RB3 (Trigger pin)
+    TRISB.F3 = 0; // Set RB3 (Trigger pin) as output
+
+    // Initialize Motor Control Pins
+    TRISC = 0x00; // Set RC4-RC7 as output (Motor control)
+
+    // Initialize Relay and Buzzer Pins
+    TRISD = 0x00; // Set RD0 and RD1 as output (Relay and Buzzer)
+
+    // Set initial state
+    PORTC = 0x00; // Initialize PORTC to low
+    PORTD.F0 = 0; // Initialize relay pin to low
+    PORTD.F1 = 0; // Initialize buzzer pin to low
+
+    // Initialize Timer0 for delay functions
+   OPTION_REG = 0x07; // Prescaler assigned to Timer0, 1:8 prescaler
+
+    // Initialize Timer1 for ultrasonic sensor
+    T1CON = 0x10; // Timer1 with 1:2 prescaler
+
+    // Initialize Timer2 for PWM
+  setupPWM();
+}
+
+void Delay_us(unsigned int us) {
+    while (us--) {
+        TMR1H = 0;  // Clear high byte of Timer1
+        TMR1L = 0;  // Clear low byte of Timer1
+        T1CON.F0 = 1;  // Start Timer1
+        while (TMR1L < 4);  // Wait until the timer overflows (1 us delay for 4 MHz clock)
+        T1CON.F0 = 0;  // Stop Timer1
+    }
+}
+
+
+
+void Delay_ms(unsigned int ms) {
+    while (ms--) {
+        Delay_us(1000); // 1 ms delay
+    }
+}
+
+unsigned int ReadUltrasonicSensor() {
+    unsigned int time = 0;
+    unsigned int timeout = 10000; // Adjust based on system clock and expected delay
+
+    // Send trigger pulse
+    TRIG_PIN = 1;
+    Delay_us(10);
+    TRIG_PIN = 0;
+
+    // Wait for echo pulse
+    while (!ECHO_PIN && --timeout); // Wait for echo or timeout
+    if (timeout == 0) {
+        return 9999; // Return a large value indicating no object detected
+    }
+
+    timeout = 10000; // Reset timeout
+    TMR1H = 0;  // Clear high byte of Timer1
+    TMR1L = 0;  // Clear low byte of Timer1
+    T1CON.F0 = 1;  // Start Timer1
+
+    while (ECHO_PIN && --timeout); // Measure echo pulse width
+    T1CON.F0 = 0;  // Stop Timer1
+
+    if (timeout == 0) {
+        return 9999; // Return a large value indicating no object detected
+    }
+
+    time = (TMR1H << 8) | TMR1L;  // Read Timer1 value
+    return (time / 13.51); // Adjusted for precision
+}
+
+void MoveForward() {
+    LEFT_MOTOR_FORWARD = 1;
+    LEFT_MOTOR_BACKWARD = 0;
+    RIGHT_MOTOR_FORWARD = 1;
+    RIGHT_MOTOR_BACKWARD = 0;
+}
+
+void MoveBackward() {
+    LEFT_MOTOR_FORWARD = 0;
+    LEFT_MOTOR_BACKWARD = 1;
+    RIGHT_MOTOR_FORWARD = 0;
+    RIGHT_MOTOR_BACKWARD = 1;
+}
+
+void TurnLeft() {
+    LEFT_MOTOR_FORWARD = 0;
+    LEFT_MOTOR_BACKWARD = 1;
+    RIGHT_MOTOR_FORWARD = 1;
+    RIGHT_MOTOR_BACKWARD = 0;
+}
+
+void TurnRight() {
+    LEFT_MOTOR_FORWARD = 1;
+    LEFT_MOTOR_BACKWARD = 0;
+    RIGHT_MOTOR_FORWARD = 0;
+    RIGHT_MOTOR_BACKWARD = 1;
+}
+
+void Stop() {
+    LEFT_MOTOR_FORWARD = 0;
+    LEFT_MOTOR_BACKWARD = 0;
+    RIGHT_MOTOR_FORWARD = 0;
+    RIGHT_MOTOR_BACKWARD = 0;
+}
+
+void main() {
+    Initialize();
+
+    while (1) {
+        distance = ReadUltrasonicSensor(); // Corrected variable assignment
+
+        // Control car movement based on ultrasonic sensor reading
+        if (distance < 20) { // Distance threshold in cm
+            Stop();
+            Delay_ms(2000); // Pause for 2000 ms
+            MoveBackward();
+            Delay_ms(500); // Move backward for 500 ms
+            TurnLeft();
+            Delay_ms(500); // Turn for 500 ms
+        } else {
+            MoveForward();
+        }
+
+        // Uncomment the following section to include flame sensor checks and servo control
+
+        if (FLAME_SENSOR_FRONT == 0 || FLAME_SENSOR_RIGHT == 1 || FLAME_SENSOR_LEFT == 1) {
+            Stop();
+            set_servo_pwm(180); // Move servo to 180 degrees
+
+            PORTD.F1 = 1; // Activate buzzer
+
+             if (  FLAME_SENSOR_FRONT == 0)
+             {
+              Delay_ms(1000); // Turn for 1000 ms
+              PORTD.F0 = 0; // Activate relay
+              }
+              else if ( FLAME_SENSOR_RIGHT == 1)
+              {
+               TurnRight();
+               Delay_ms(500); // Turn for 1000 ms
+              PORTD.F0 = 0; // Activate relay
+              }
+               else if ( FLAME_SENSOR_LEFT == 1)
+              {
+               TurnLeft();
+               Delay_ms(500); // Turn for 1000 ms
+              PORTD.F0 = 0; // Activate relay
+              }
+              
+              
+        } else {
+            MoveForward();
+            PORTD.F0 = 1; // Deactivate relay
+            PORTD.F1 = 0; // Deactivate buzzer
+        }
+
+    }
+}
